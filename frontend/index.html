@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Market Strategy Explorer</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20261005-chat-errors1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css?v=20261005-chat-errors1" />
+<script src="/static/vendor/chart.umd.js"></script>
+<script src="/static/vendor/lightweight-charts.js"></script>
+</head>
+<body>
+  <div id="index-strip" class="index-strip"></div>
+
+  <div class="topbar">
+    <button id="back-button" class="back-button" type="button" aria-label="Go back to the previous page" onclick="window.location.assign('/')">← Back</button>
+    <div class="brand">
+      <span class="brand-mark">◈</span>
+      <div class="brand-text">
+        <span class="brand-name">Market Strategy Explorer</span>
+        <span class="brand-sub">NSE / BSE · Plain-language research dashboard</span>
+      </div>
+    </div>
+
+    <div class="global-search">
+      <input id="search-box" type="text" placeholder="Search NSE/BSE company or symbol…" autocomplete="off" />
+      <div id="search-results" class="search-results"></div>
+    </div>
+
+    <button id="compare-toggle" class="compare-toggle hidden">+ Compare</button>
+  </div>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <h3>Watchlist</h3>
+      <ul id="watchlist" class="watchlist"></ul>
+      <p id="watchlist-empty" class="watchlist-empty">Search a stock above and star it to pin it here.</p>
+    </aside>
+
+    <main id="home-chat" class="home-chat">
+      <div class="home-welcome"><span class="brand-mark">◈</span><h1>Understand a stock in plain English</h1><p>Ask about a company or market pattern, or paste a headline to explore its possible impact. Live news lookup is off by default. Select a stock first to include its chart and latest available data.</p></div>
+      <div id="home-chat-mount"></div>
+    </main>
+
+    <main id="dashboard" class="dashboard hidden">
+      <div class="dashboard-row">
+      <div class="chart-zone">
+        <div class="symbol-header">
+          <div class="symbol-id">
+            <h1 id="q-symbol">—</h1>
+            <button id="watchlist-btn" class="watchlist-btn" title="Add to watchlist">☆</button>
+            <span id="q-company" class="company-name">—</span>
+          </div>
+          <span id="q-market-status" class="badge">—</span>
+        </div>
+
+        <div class="price-line">
+          <span id="q-price" class="price-value">—</span>
+          <span id="q-change" class="change">—</span>
+        </div>
+
+        <section class="panel plain-language-panel" aria-labelledby="plain-language-title">
+          <h3 id="plain-language-title">Start here: what this page means</h3>
+          <p id="plain-current-summary">Choose a stock to see the AI's market forecast and which simple rules the historical simulation would use.</p>
+          <p class="source-tag">The chart markers come from a separate rule-based signal. All strategy results use pretend money and past prices; no broker or real account is connected.</p>
+        </section>
+
+        <div id="compare-panel" class="compare-panel hidden">
+          <input id="compare-box" type="text" placeholder="Search a stock to compare…" autocomplete="off" />
+          <div id="compare-results" class="search-results"></div>
+          <span id="compare-active" class="compare-active hidden"></span>
+        </div>
+
+        <div class="chart-toolbar">
+          <div id="period-pills" class="period-pills"></div>
+          <button id="export-btn" class="export-btn">Export CSV</button>
+        </div>
+        <p id="intraday-note" class="intraday-note hidden"></p>
+
+        <div class="chart-container">
+          <div id="chart-loading" class="chart-loading hidden"><div class="spinner"></div></div>
+          <p id="chart-data-state" class="chart-data-state hidden" role="status"></p>
+          <div id="price-chart" class="candle-chart"></div>
+        </div>
+        <div class="chart-explainer" aria-live="polite"><b>How to read this chart</b><p id="chart-explain">Choose a stock to see what each candle means.</p><small id="chart-date-range">Date range appears here.</small></div>
+
+        <div class="legend">
+          <span class="legend-item" title="Bull Trend: prices have been trending upward."><i style="background:#1fb45c"></i>Rising trend</span>
+          <span class="legend-item" title="Bear Trend: prices have been trending downward."><i style="background:#e5484d"></i>Falling trend</span>
+          <span class="legend-item" title="High Volatility: prices are moving unusually sharply."><i style="background:#f2b134"></i>Large price swings</span>
+          <span class="legend-item" title="Range / Sideways: no clear direction; no chart signals are shown."><i style="background:#64748b"></i>Sideways · wait</span>
+          <span class="legend-item" title="Buy only after bull regime, momentum, and the broader trend agree."><span class="marker-sample buy">▲</span>Buy</span>
+          <span class="legend-item" title="Sell only after a sustained bear regime and confirmed break below a falling 50-bar average."><span class="marker-sample sell">▼</span>Confirmed sell</span>
+          <span class="legend-item compare-legend hidden" id="compare-legend"><i style="background:#38bdf8"></i><span id="compare-legend-label">Comparison</span></span>
+        </div>
+
+      <div class="panel backtest-panel">
+        <div class="backtest-header">
+          <div class="strategy-comparison-heading">
+            <h4>Practice: compare methods on past prices</h4>
+            <details class="metric-guide">
+              <summary>ⓘ What do these results mean?</summary>
+              <div class="metric-guide-popover">
+                <dl>
+                  <div><dt>Pretend money change</dt><dd>How much the simulated funds grew or shrank on these old prices, after estimated costs.</dd></div>
+                  <div><dt>Past trades ending positive</dt><dd>The share of completed simulated trades that made money. This does not say how much each trade made or lost.</dd></div>
+                  <div><dt>Worst past fall</dt><dd>The largest decline from an earlier high point in this simulation.</dd></div>
+                </dl>
+                <p><strong>Remember:</strong> these are results from a simplified replay of old prices, not a prediction or promise.</p>
+              </div>
+            </details>
+          </div>
+          <span class="backtest-note" id="backtest-note">Historical practice simulation using pretend money, not a broker account.</span>
+        </div>
+
+        <div id="active-strategy-summary" class="active-strategy-summary" aria-live="polite">
+          <div class="active-strategy-heading">
+            <span class="eyebrow">Rule-based baseline · separate from the AI forecast</span>
+            <details class="decision-score-info" id="active-strategy-score">
+              <summary>Rule match score · <b id="active-strategy-score-value">—</b> <span aria-hidden="true">ⓘ</span></summary>
+              <div class="decision-score-popover">
+                <strong>Decision Score</strong>
+                <p>A rule-based score showing how strongly the current market signals support the selected decision.</p>
+                <p>It is not a probability and does not represent the likelihood of future returns.</p>
+              </div>
+            </details>
+          </div>
+          <div class="active-strategy-flow">
+            <div class="active-strategy-step">
+              <span class="step-label">What the simple rule sees</span>
+              <b id="active-regime">Select a stock to load</b>
+            </div>
+            <span class="flow-arrow" aria-hidden="true">↓</span>
+            <div class="active-strategy-step">
+              <span class="step-label">Reference method (not the AI method)</span>
+              <b id="active-strategy">—</b>
+            </div>
+            <div class="active-strategy-why">
+              <span class="step-label" id="active-strategy-why-title">Why this strategy?</span>
+              <strong id="active-strategy-reason">The system will show the rule detector's explanation.</strong>
+              <span class="active-strategy-evidence" id="active-strategy-evidence"></span>
+              <details class="active-strategy-technical">
+                <summary>Show the technical explanation</summary>
+                <span id="active-strategy-technical-reason">—</span>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div id="strategy-cards" class="strategy-cards" aria-live="polite">
+          <p class="strategy-state">Select a stock to calculate strategy performance from its historical prices.</p>
+        </div>
+        <div id="benchmark-strip" class="benchmark-strip hidden" aria-live="polite"></div>
+
+        <details class="metrics-details" id="backtest-details">
+          <summary>More detailed numbers</summary>
+          <p class="metrics-help" id="metrics-help">These are pretend-money results replayed on old prices. They do not describe a real account or predict future gains.</p>
+          <div class="bt-table-wrap">
+            <table class="bt-table" id="bt-table">
+              <thead><tr><th>Method</th><th>Pretend money change</th><th>Annual pace</th><th>Return vs risk</th><th>Downside score</th><th>Worst fall</th><th>Winning trades</th><th>Profit / loss</th><th>Avg win</th><th>Avg loss</th><th>Loss streak</th><th>Avg pretend money invested</th><th>Trades</th></tr></thead>
+              <tbody id="bt-table-body"><tr><td colspan="13">—</td></tr></tbody>
+            </table>
+          </div>
+        </details>
+
+        <section class="performance-section" aria-labelledby="performance-title">
+          <div class="performance-heading">
+            <div>
+              <h5 id="performance-title">Pretend money over time</h5>
+              <p id="backtest-chart-period">Past simulation only · daily data</p>
+            </div>
+            <span class="chart-unit">Return from common 0% baseline</span>
+          </div>
+          <div id="backtest-chart-legend" class="backtest-chart-legend" aria-label="Toggle performance series"></div>
+          <div class="chart-container backtest-chart-container">
+          <div id="backtest-loading" class="chart-loading hidden"><div class="spinner"></div></div>
+          <canvas id="backtest-chart"></canvas>
+          </div>
+        </section>
+      </div>
+
+      <div class="panel">
+        <div class="backtest-header">
+          <div class="regime-perf-title">
+          <h4>How the stock moved in different conditions</h4>
+            <details class="regime-metric-help">
+              <summary>ⓘ What do these metrics mean?</summary>
+              <div class="regime-metric-popover">
+                <dl>
+                  <div><dt>Days</dt><dd>Number of trading days classified under that regime.</dd></div>
+                  <div><dt>% of Period</dt><dd>How much of the evaluation period was spent in that regime.</dd></div>
+                  <div><dt>Total Return</dt><dd>Overall return during the days classified under this condition.</dd></div>
+                  <div><dt>Avg Daily Return</dt><dd>The average daily return during that regime.</dd></div>
+                  <div><dt>Positive Days</dt><dd>Percentage of those regime days when the stock had a positive return.</dd></div>
+                </dl>
+              </div>
+            </details>
+          </div>
+          <span class="backtest-note">How the stock performed when the market was trending, highly volatile, or moving sideways.</span>
+        </div>
+        <div class="bt-table-wrap">
+          <table class="bt-table regime-perf-table" id="regime-perf-table">
+            <thead><tr>
+              <th scope="col"><span>Market pattern</span><details class="regime-header-help" id="regime-header-help">
+                <summary aria-label="Explain the market regimes" title="Explain the market regimes">ⓘ</summary>
+                <div class="regime-help-popover" id="regime-help-popover">
+                  <dl>
+                    <div><dt>Bull Trend</dt><dd>Prices are generally moving upward with stronger positive momentum.</dd></div>
+                    <div><dt>Bear Trend</dt><dd>Prices are generally moving downward with weaker or negative momentum.</dd></div>
+                    <div><dt>High Volatility</dt><dd>Prices are experiencing unusually large or rapid movements.</dd></div>
+                    <div><dt>Range / Sideways</dt><dd>Prices are moving within a relatively stable range without a strong direction.</dd></div>
+                  </dl>
+                </div>
+              </details></th>
+              <th scope="col">Trading days</th><th scope="col">Share of dates</th><th scope="col">Past price change</th><th scope="col">Average daily change</th><th scope="col">Days price rose</th>
+            </tr></thead>
+            <tbody id="regime-perf-body"><tr><td colspan="6">—</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      </div>
+
+      <div class="side-rail">
+        <div class="panel" id="decision-panel">
+          <h4>Simple rule reading · comparison</h4>
+          <div class="decision-badge" id="decision-badge">—</div>
+
+          <div class="meter">
+          <div class="meter-head"><span>Rule match score · not the chance of profit</span><b id="decision-confidence">—</b></div>
+            <div class="bar-track"><div class="bar-fill" id="confidence-bar"></div></div>
+          </div>
+          <div class="meter">
+            <div class="meter-head"><span>Share of pretend funds used</span><b id="decision-exposure">—</b></div>
+            <div class="bar-track"><div class="bar-fill exposure-fill" id="exposure-bar"></div></div>
+          </div>
+
+          <div class="kv-block"><span>Rule reference</span><b id="decision-strategy">—</b></div>
+          <div class="stat-row"><span>Price swing estimate</span><b id="decision-risk">—</b></div>
+
+          <details class="technical-details">
+            <summary>How the decision was formed</summary>
+            <div class="decision-sublabel">Heuristic Score Breakdown</div>
+            <div class="stat-row small"><span>Trend Strength</span><b id="conf-trend">—</b></div>
+            <div class="stat-row small"><span>Volatility Clarity</span><b id="conf-vol">—</b></div>
+            <div class="stat-row small"><span>Momentum Agreement</span><b id="conf-momentum">—</b></div>
+            <div class="stat-row small"><span>Regime Consistency</span><b id="conf-consistency">—</b></div>
+            <div class="decision-sublabel">Signals</div>
+            <ul class="decision-reasons" id="decision-reasons"></ul>
+          </details>
+          <div class="source-tag">Educational simulation — not financial advice.</div>
+        </div>
+
+        <div class="panel">
+          <h4>Session</h4>
+          <div class="stat-row"><span>Open</span><b id="q-open">—</b></div>
+          <div class="stat-row"><span>High</span><b id="q-high">—</b></div>
+          <div class="stat-row"><span>Low</span><b id="q-low">—</b></div>
+          <div class="stat-row"><span>Prev Close</span><b id="q-prevclose">—</b></div>
+          <div class="source-tag" id="q-source">—</div>
+        </div>
+
+        <div class="panel" id="risk-panel">
+          <h4>Example trade safety plan</h4>
+          <div class="source-tag">For learning only; these prices are not orders.</div>
+          <div class="stat-row"><span>Example starting price</span><b id="risk-entry">—</b></div>
+          <div class="stat-row"><span>Example exit if price falls</span><b id="risk-stop" class="down">—</b></div>
+          <div class="stat-row"><span>Example profit goal</span><b id="risk-target" class="up">—</b></div>
+          <div class="stat-row"><span>Possible loss compared with gain</span><b id="risk-rr">—</b></div>
+
+          <div class="decision-sublabel">Pretend example · ₹1,00,000 practice funds · 1% at risk</div>
+          <div class="stat-row"><span>Example share count</span><b id="risk-shares">—</b></div>
+          <div class="stat-row"><span>Example amount used</span><b id="risk-position-value">—</b></div>
+          <div class="stat-row"><span>% of pretend funds</span><b id="risk-position-pct">—</b></div>
+          <div class="stat-row"><span>Pretend money at risk</span><b id="risk-amount">—</b></div>
+          <p id="risk-cap-note" class="indicators-empty hidden"></p>
+          <div class="source-tag">Educational simulation — not financial advice.</div>
+        </div>
+
+        <div class="panel trend-snapshot" id="regime-panel">
+          <h4>Rule-based regime · baseline</h4>
+          <div class="regime-badge" id="regime-badge">—</div>
+          <p id="regime-strategy" class="regime-strategy">—</p>
+          <div class="trend-cues" id="trend-cues" aria-label="Key trend and risk indicators">
+            <div title="ADX indicates how strongly prices are moving in one direction."><span>Trend strength</span><b id="trend-adx">—</b></div>
+            <div title="RSI summarizes recent buying and selling pressure."><span>Buying / selling pressure</span><b id="trend-rsi">—</b></div>
+            <div title="Volatility describes how sharply prices have been moving."><span>Recent price swings</span><b id="trend-volatility">—</b></div>
+          </div>
+          <details class="technical-details regime-explanation">
+            <summary>Why did the simple rule say this?</summary>
+            <p id="regime-reason" class="regime-reason">—</p>
+          </details>
+        </div>
+
+        <div class="panel" id="ml-regime-panel">
+          <h4>AI forecast · next 20 trading days</h4>
+          <div class="regime-badge" id="ml-regime-badge">Loading…</div>
+          <div class="stat-row"><span>Model score · rough, not a promise</span><b id="ml-confidence">—</b></div>
+          <div class="stat-row"><span>How far ahead?</span><b id="ml-agreement">—</b></div>
+          <div class="stat-row"><span>Method actually used in simulation</span><b id="switch-strategy">—</b></div>
+          <p id="switch-strategy-explanation" class="regime-reason">—</p>
+          <p class="source-tag">This forecast selects rules for a historical simulation. It does not place an order.</p>
+          <details class="technical-details">
+            <summary>Technical details</summary>
+            <div class="decision-sublabel">Model scores by possible outcome</div>
+            <div id="ml-probabilities" class="regime-reason">—</div>
+            <div class="decision-sublabel">Indicators the model used most overall</div>
+            <div id="ml-features" class="regime-reason">—</div>
+          </details>
+          <div class="source-tag" id="ml-evaluation">Forward-outcome holdout metrics · Loading…</div>
+        </div>
+
+        <div class="panel" id="switch-history-panel">
+          <h4>How the AI chose a method in the past</h4>
+          <p class="source-tag">For each date, the forecast selects a method. The percentage is pretend money used by the simulation.</p>
+          <div class="bt-table-wrap"><table class="bt-table"><thead><tr><th>Date</th><th>Forecast</th><th>What happened next</th><th>Method used</th><th>Pretend money invested</th><th>Simulated change</th></tr></thead><tbody id="switch-history-body"><tr><td colspan="6">Loading…</td></tr></tbody></table></div>
+        </div>
+
+        <details class="panel technical-details" id="indicators-panel">
+          <summary>Technical indicators</summary>
+          <div id="indicators-body"><p class="indicators-empty">Loading…</p></div>
+        </details>
+
+        <div class="panel compare-regime-card hidden" id="compare-regime-card">
+          <h4>Comparison Regime</h4>
+          <div class="regime-badge" id="compare-regime-badge">—</div>
+          <p id="compare-regime-symbol" class="regime-strategy">—</p>
+          <p id="compare-regime-reason" class="regime-reason">—</p>
+        </div>
+      </div>
+      </div>
+
+      <section class="stock-chat-section" aria-label="Ask about this stock">
+        <div class="stock-chat-heading"><h2>Ask about this stock</h2><p>Answers use the selected timeframe and current available data. Paste a headline to discuss it; live news lookup is off by default.</p></div>
+        <div id="stock-chat-mount"></div>
+      </section>
+
+    </main>
+  </div>
+
+  <p id="status-msg" class="status-msg"></p>
+
+  <script src="/static/chat-ui.js?v=20261005-chat-render-stock-context2"></script>
+  <script src="/static/app.js?v=20261005-dashboard-check4"></script>
+</body>
+</html>
