@@ -54,6 +54,32 @@ let lastHistory = null;
 let latestRegimeData = null;
 let latestDecisionData = null;
 let quoteCurrency = null;
+const mlEvaluationCache = new Map();
+
+function dashboardChartPalette() {
+  return document.documentElement.dataset.theme === "light"
+    ? { text: "#66768a", grid: "#e1e8f0", border: "#d4deea", title: "#394a60" }
+    : { text: "#808a9c", grid: "#1c2230", border: "#232a37", title: "#aab4c5" };
+}
+
+document.addEventListener("dashboard-theme-change", () => {
+  const palette = dashboardChartPalette();
+  if (priceChart) priceChart.applyOptions({
+    layout: { textColor: palette.text },
+    grid: { vertLines: { color: palette.grid }, horzLines: { color: palette.grid } },
+    rightPriceScale: { borderColor: palette.border },
+    timeScale: { borderColor: palette.border },
+  });
+  if (backtestChart) {
+    for (const axis of ["x", "y"]) {
+      const scale = backtestChart.options.scales[axis];
+      scale.title.color = palette.title;
+      scale.ticks.color = palette.text;
+      scale.grid.color = palette.grid;
+    }
+    backtestChart.update();
+  }
+});
 
 function priceFormatForCurrency(currency) {
   if (!currency) return { type: "price", precision: 2, minMove: 0.01 };
@@ -325,7 +351,6 @@ async function loadAnalysisPanels(symbol) {
     fetch(`${API}/api/regime/${symbol}?${qs}`).catch(() => null),
     fetch(`${API}/api/indicators/${symbol}?${qs}`).catch(() => null),
     fetch(`${API}/api/ml-regime/${symbol}?period=5y&interval=${currentTf.interval}`).catch(() => null),
-    fetch(`${API}/api/ml-evaluation/${symbol}?period=5y&interval=${currentTf.interval}`).catch(() => null),
   ];
   if (compareSymbol) requests.push(fetch(`${API}/api/regime/${compareSymbol}?${qs}`).catch(() => null));
 
@@ -346,13 +371,12 @@ async function loadAnalysisPanels(symbol) {
     renderIndicatorsPanel(null);
   }
 
-  // The ML evaluation runs a walk-forward simulation and can take much longer
-  // than current market readings. Keep the useful rule, indicator, decision,
-  // and risk panels responsive while it completes.
+  // Keep the formal historical evaluation out of the initial load; it is
+  // available on demand inside the forecast's Technical details section.
   loadDecision(symbol, qs);
   loadRiskPanel(symbol, qs);
-  if (compareSymbol && requests[4]) {
-    readJson(await requests[4]).then((data) => {
+  if (compareSymbol && requests[3]) {
+    readJson(await requests[3]).then((data) => {
       if (symbol !== currentSymbol) return;
       if (data) renderCompareRegimeCard(data);
       else document.getElementById("compare-regime-card").classList.add("hidden");
@@ -360,14 +384,45 @@ async function loadAnalysisPanels(symbol) {
   } else {
     document.getElementById("compare-regime-card").classList.add("hidden");
   }
-  Promise.all([readJson(requests[2]), readJson(requests[3])])
-    .then(([prediction, evaluation]) => {
-      if (symbol === currentSymbol) renderMLRegime(prediction, evaluation);
+  readJson(requests[2])
+    .then((prediction) => {
+      if (symbol === currentSymbol) renderMLRegime(prediction, null);
     })
     .catch(() => {
       if (symbol === currentSymbol) renderMLRegime(null, null);
     });
 }
+
+async function loadMLEvaluation(symbol, interval) {
+  const key = `${symbol}:${interval}`;
+  const target = document.getElementById("ml-evaluation");
+  if (!target || mlEvaluationCache.has(key)) return;
+  target.textContent = "Checking past forecasts against later market patterns…";
+  const request = fetch(`${API}/api/ml-evaluation/${symbol}?period=5y&interval=${interval}`)
+    .then(async (response) => {
+      if (!response.ok) throw new Error("Model evaluation is unavailable.");
+      return response.json();
+    });
+  mlEvaluationCache.set(key, request);
+  try {
+    const evaluation = await request;
+    if (symbol !== currentSymbol || interval !== currentTf.interval) return;
+    const accuracy = evaluation?.metrics?.accuracy;
+    target.textContent = Number.isFinite(accuracy)
+      ? `The AI matched the later market pattern on about ${Math.round(accuracy * 100)}% of past examples. This is not a measure of profit or a promise about the future.`
+      : "There is not enough history to check past forecasts.";
+  } catch {
+    if (symbol !== currentSymbol || interval !== currentTf.interval) return;
+    mlEvaluationCache.delete(key);
+    target.textContent = "Past forecast check is temporarily unavailable. Open this section again to retry.";
+  }
+}
+
+document.getElementById("ml-technical-details")?.addEventListener("toggle", (event) => {
+  if (event.currentTarget.open && currentSymbol) {
+    loadMLEvaluation(currentSymbol, currentTf.interval);
+  }
+});
 
 // ================= RISK MANAGEMENT =================
 
@@ -562,7 +617,6 @@ function renderMLRegime(prediction, evaluation) {
     document.getElementById("plain-current-summary").textContent = "The forecast is unavailable for this stock or timeframe. Try a longer date range.";
     document.getElementById("ml-probabilities").textContent = "—";
     document.getElementById("ml-features").textContent = "—";
-    document.getElementById("ml-evaluation").textContent = "ML requires sufficient multi-regime history.";
     return;
   }
   badge.textContent = prediction.predicted_regime;
@@ -585,7 +639,7 @@ function renderMLRegime(prediction, evaluation) {
   document.getElementById("ml-probabilities").textContent = Object.entries(prediction.class_probabilities).map(([k, v]) => `${k}: ${(v * 100).toFixed(1)}%`).join(" · ");
   document.getElementById("ml-features").textContent = prediction.important_features.map((x) => `${x.feature} (${(x.importance * 100).toFixed(1)}%)`).join(" · ");
   const m = evaluation?.metrics;
-  document.getElementById("ml-evaluation").textContent = m ? `The AI matched the later market pattern on about ${Math.round(m.accuracy * 100)}% of past examples. That does not tell us whether the strategy made money or what happens next.` : "The app needs more past data before it can check this forecast.";
+  if (m) document.getElementById("ml-evaluation").textContent = `The AI matched the later market pattern on about ${Math.round(m.accuracy * 100)}% of past examples. This is not a measure of profit or a promise about the future.`;
 }
 
 function renderCompareRegimeCard(r) {
@@ -772,11 +826,12 @@ function renderChart(history, compareHistory) {
     compareSeries = null;
   }
 
+  const chartPalette = dashboardChartPalette();
   priceChart = LightweightCharts.createChart(container, {
-    layout: { background: { color: "transparent" }, textColor: "#808a9c", fontFamily: "'JetBrains Mono', monospace", fontSize: Math.round(11 * uiScale()) },
-    grid: { vertLines: { color: "#1c2230" }, horzLines: { color: "#1c2230" } },
-    rightPriceScale: { borderColor: "#232a37" },
-    timeScale: { borderColor: "#232a37", timeVisible: INTRADAY_INTERVALS.includes(currentTf.interval), secondsVisible: false, minBarSpacing: 0.05, rightOffset: 4 },
+    layout: { background: { color: "transparent" }, textColor: chartPalette.text, fontFamily: "'JetBrains Mono', monospace", fontSize: Math.round(11 * uiScale()) },
+    grid: { vertLines: { color: chartPalette.grid }, horzLines: { color: chartPalette.grid } },
+    rightPriceScale: { borderColor: chartPalette.border },
+    timeScale: { borderColor: chartPalette.border, timeVisible: INTRADAY_INTERVALS.includes(currentTf.interval), secondsVisible: false, minBarSpacing: 0.05, rightOffset: 4 },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     autoSize: true,
   });
@@ -811,7 +866,7 @@ function renderChart(history, compareHistory) {
       .map((h) => ({ time: toChartTime(h.date), value: h.Close }))
       .filter((d) => d.value != null);
     compareSeries.setData(compareData);
-    priceChart.priceScale("left").applyOptions({ visible: true, borderColor: "#232a37" });
+    priceChart.priceScale("left").applyOptions({ visible: true, borderColor: chartPalette.border });
   } else {
     priceChart.priceScale("left").applyOptions({ visible: false });
   }
@@ -1167,11 +1222,11 @@ function renderBacktestChart(data) {
         },
       },
       scales: {
-        x: { title: { display: true, text: "Evaluation date", color: "#aab4c5", font: { family: "Inter, sans-serif", size: Math.round(10 * uiScale()), weight: "600" } }, ticks: { color: "#808a9c", maxTicksLimit: 7, maxRotation: 0, font: { family: "'JetBrains Mono', ui-monospace, monospace", size: Math.round(10 * uiScale()) } }, grid: { color: "#1c2230" } },
+        x: { title: { display: true, text: "Evaluation date", color: dashboardChartPalette().title, font: { family: "Inter, sans-serif", size: Math.round(10 * uiScale()), weight: "600" } }, ticks: { color: dashboardChartPalette().text, maxTicksLimit: 7, maxRotation: 0, font: { family: "'JetBrains Mono', ui-monospace, monospace", size: Math.round(10 * uiScale()) } }, grid: { color: dashboardChartPalette().grid } },
         y: {
-          title: { display: true, text: "Cumulative return (%)", color: "#aab4c5", font: { family: "Inter, sans-serif", size: Math.round(10 * uiScale()), weight: "600" } },
-          ticks: { color: "#808a9c", font: { family: "'JetBrains Mono', ui-monospace, monospace", size: Math.round(10 * uiScale()) }, callback: (v) => `${v}%` },
-          grid: { color: "#1c2230" },
+          title: { display: true, text: "Cumulative return (%)", color: dashboardChartPalette().title, font: { family: "Inter, sans-serif", size: Math.round(10 * uiScale()), weight: "600" } },
+          ticks: { color: dashboardChartPalette().text, font: { family: "'JetBrains Mono', ui-monospace, monospace", size: Math.round(10 * uiScale()) }, callback: (v) => `${v}%` },
+          grid: { color: dashboardChartPalette().grid },
         },
       },
     },

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css?v=20261005-chat-errors1" />
+<link rel="stylesheet" href="/static/style.css?v=20261017-theme-ai-shortcut2" />
 <script src="/static/vendor/chart.umd.js"></script>
 <script src="/static/vendor/lightweight-charts.js"></script>
 </head>
@@ -31,6 +31,7 @@
     </div>
 
     <button id="compare-toggle" class="compare-toggle hidden">+ Compare</button>
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to light mode" title="Switch to light mode">☀ Light</button>
   </div>
 
   <div class="layout">
@@ -302,14 +303,15 @@
           <div class="stat-row"><span>Method actually used in simulation</span><b id="switch-strategy">—</b></div>
           <p id="switch-strategy-explanation" class="regime-reason">—</p>
           <p class="source-tag">This forecast selects rules for a historical simulation. It does not place an order.</p>
-          <details class="technical-details">
+          <details class="technical-details" id="ml-technical-details">
             <summary>Technical details</summary>
             <div class="decision-sublabel">Model scores by possible outcome</div>
             <div id="ml-probabilities" class="regime-reason">—</div>
             <div class="decision-sublabel">Indicators the model used most overall</div>
             <div id="ml-features" class="regime-reason">—</div>
+            <div class="decision-sublabel">Past forecast check</div>
+            <div class="source-tag" id="ml-evaluation">Open technical details to check past forecasts.</div>
           </details>
-          <div class="source-tag" id="ml-evaluation">Forward-outcome holdout metrics · Loading…</div>
         </div>
 
         <div class="panel" id="switch-history-panel">
@@ -332,10 +334,17 @@
       </div>
       </div>
 
-      <section class="stock-chat-section" aria-label="Ask about this stock">
-        <div class="stock-chat-heading"><h2>Ask about this stock</h2><p>Answers use the selected timeframe and current available data. Paste a headline to discuss it; live news lookup is off by default.</p></div>
+      <section id="stock-chat-section" class="stock-chat-section" aria-labelledby="stock-chat-title">
+        <div class="stock-chat-heading">
+          <div><h2 id="stock-chat-title">Ask about this stock</h2><p>Answers use the selected timeframe and current available data. Paste a headline to discuss it; live news lookup is off by default.</p></div>
+          <button id="assistant-chat-close" class="assistant-chat-close" type="button" aria-label="Close AI chat">×</button>
+        </div>
         <div id="stock-chat-mount"></div>
       </section>
+
+      <button id="assistant-shortcut" class="assistant-shortcut" type="button" aria-label="Ask the AI about this stock" title="Ask the AI about this stock" aria-controls="stock-chat-section" aria-expanded="false">
+        <span aria-hidden="true">✦</span><span class="assistant-shortcut-label">Ask AI</span>
+      </button>
 
     </main>
   </div>
@@ -343,6 +352,7 @@
   <p id="status-msg" class="status-msg"></p>
 
   <script src="/static/chat-ui.js?v=20261005-chat-render-stock-context2"></script>
-  <script src="/static/app.js?v=20261005-dashboard-check4"></script>
+  <script src="/static/ui-controls.js?v=20261017-chat-popup2"></script>
+  <script src="/static/app.js?v=20261017-analysis-fastload1"></script>
 </body>
 </html>

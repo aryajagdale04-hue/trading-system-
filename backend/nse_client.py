@@ -61,6 +61,10 @@ HEADERS = {
 
 QUOTE_CACHE_TTL = 5      # seconds — live quotes refresh fast but don't hammer NSE
 SYMBOL_LIST_TTL = 60 * 60 * 12  # 12 hours — company list barely changes
+HISTORY_CACHE_TTLS = {
+    "1m": 30, "2m": 60, "5m": 60, "15m": 120, "30m": 120,
+    "1h": 300, "1d": 900, "1wk": 3600, "1mo": 3600,
+}
 
 
 class NSEClient:
@@ -70,6 +74,9 @@ class NSEClient:
         self._quote_cache = {}       # symbol -> (timestamp, data)
         self._symbol_list_cache = None
         self._symbol_list_ts = 0
+        self._history_cache = {}     # (symbol, period, interval) -> (timestamp, DataFrame)
+        self._history_locks = {}
+        self._history_cache_lock = threading.Lock()
 
     # ---------- session handling ----------
 
@@ -283,21 +290,48 @@ class NSEClient:
         caught here and normalized to an empty DataFrame rather than letting
         it bubble up as an unhandled 500.
         """
-        try:
-            # Yahoo index symbols (e.g. ^NSEI) already identify their exchange
-            # series and must not receive an equity suffix.
-            if symbol.startswith("^"):
-                return yf.Ticker(symbol).history(period=period, interval=interval)
-            ticker = yf.Ticker(f"{symbol}.NS")
-            df = ticker.history(period=period, interval=interval)
-            if df.empty:
-                # Some symbols are BSE-listed only
-                ticker = yf.Ticker(f"{symbol}.BO")
-                df = ticker.history(period=period, interval=interval)
-            return df
-        except Exception as e:
-            print(f"[history] failed for {symbol} ({period}/{interval}): {e}")
-            return pd.DataFrame()
+        symbol = symbol.upper().strip()
+        key = (symbol, period, interval)
+        now = time.monotonic()
+        ttl = HISTORY_CACHE_TTLS.get(interval, 300)
+        with self._history_cache_lock:
+            cached = self._history_cache.get(key)
+            if cached and now - cached[0] < cached[2]:
+                return cached[1].copy()
+            lock = self._history_locks.setdefault(key, threading.Lock())
+
+        # Several dashboard panels request the same five-year series at once.
+        # Serialize only identical requests, then reuse the first download.
+        with lock:
+            now = time.monotonic()
+            with self._history_cache_lock:
+                cached = self._history_cache.get(key)
+                if cached and now - cached[0] < cached[2]:
+                    return cached[1].copy()
+            try:
+                # Yahoo index symbols (e.g. ^NSEI) already identify their exchange.
+                if symbol.startswith("^"):
+                    df = yf.Ticker(symbol).history(period=period, interval=interval)
+                else:
+                    ticker = yf.Ticker(f"{symbol}.NS")
+                    df = ticker.history(period=period, interval=interval)
+                    if df.empty:
+                        # Some symbols are BSE-listed only.
+                        ticker = yf.Ticker(f"{symbol}.BO")
+                        df = ticker.history(period=period, interval=interval)
+            except Exception as e:
+                print(f"[history] failed for {symbol} ({period}/{interval}): {e}")
+                df = pd.DataFrame()
+            with self._history_cache_lock:
+                # Keep failed/empty responses briefly so parallel panels do not
+                # all hammer the provider during an outage.
+                effective_ttl = ttl if not df.empty else min(ttl, 15)
+                self._history_cache[key] = (time.monotonic(), df.copy(), effective_ttl)
+                if len(self._history_cache) > 128:
+                    oldest = min(self._history_cache, key=lambda item: self._history_cache[item][0])
+                    if oldest != key:
+                        self._history_cache.pop(oldest, None)
+            return df.copy()
 
 
 nse_client = NSEClient()

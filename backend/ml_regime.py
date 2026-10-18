@@ -1,4 +1,7 @@
 """Leakage-aware forward-outcome market regime classification."""
+import copy
+import hashlib
+import threading
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
@@ -9,9 +12,13 @@ from adaptive_strategy import STRATEGY_BY_REGIME, STRATEGY_EXPLANATION
 
 RANDOM_STATE = 42
 HORIZON = 20
+WALK_FORWARD_TREES = 100
 REGIMES = ["Bull Trend", "Bear Trend", "Range / Sideways", "High Volatility"]
 FEATURES = ["rsi_14", "macd_hist", "roc_10", "adx_14", "hist_vol_20", "vol_percentile", "bb_width_pct", "volume_vs_avg_pct", "close_vs_sma20_pct", "close_vs_sma50_pct"]
 MIN_SAMPLES = 80
+_WALK_FORWARD_CACHE = {}
+_WALK_FORWARD_LOCKS = {}
+_WALK_FORWARD_CACHE_LOCK = threading.Lock()
 TARGET_DEFINITION = (
     "Market outcome over the next 20 trading bars: High Volatility when forward realized "
     "volatility exceeds the trailing historical-volatility 80th percentile; otherwise Bull "
@@ -62,17 +69,17 @@ def _dataset(df: pd.DataFrame, interval: str = "1d") -> tuple[pd.DataFrame, list
     return data, present
 
 
-def _make_model(kind="forest", max_depth=8):
+def _make_model(kind="forest", max_depth=8, n_estimators=300):
     if kind == "boosting":
         return HistGradientBoostingClassifier(max_iter=120, max_leaf_nodes=15, l2_regularization=1.0, random_state=RANDOM_STATE)
-    return RandomForestClassifier(n_estimators=300, max_depth=max_depth, min_samples_leaf=3,
+    return RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, min_samples_leaf=3,
                                   class_weight="balanced_subsample", random_state=RANDOM_STATE, n_jobs=-1)
 
 
-def _fit(train: pd.DataFrame, kind="forest", depth=8):
+def _fit(train: pd.DataFrame, kind="forest", depth=8, n_estimators=300):
     if train.target.nunique() < 2:
         raise ValueError("Training window contains fewer than two forward-outcome regimes; use longer history.")
-    return _make_model(kind, depth).fit(train[FEATURES], train.target)
+    return _make_model(kind, depth, n_estimators).fit(train[FEATURES], train.target)
 
 
 def _metrics(actual, predicted, labels):
@@ -118,7 +125,7 @@ def evaluate_regime_model(df: pd.DataFrame, interval: str = "1d") -> dict:
     }
 
 
-def walk_forward_regime_predictions(df: pd.DataFrame, interval: str = "1d", initial_train_fraction: float = .60, refit_every: int = 21):
+def _walk_forward_uncached(df: pd.DataFrame, interval: str = "1d", initial_train_fraction: float = .60, refit_every: int = 21):
     """Train on matured outcome labels only, and predict forward-outcome regime at each block origin."""
     if not 0 < initial_train_fraction < 1:
         raise ValueError("initial_train_fraction must be greater than 0 and less than 1.")
@@ -139,7 +146,11 @@ def walk_forward_regime_predictions(df: pd.DataFrame, interval: str = "1d", init
             continue
         end = min(start + refit_every, len(feature_rows))
         block = feature_rows.iloc[start:end]
-        model = _fit(eligible)
+        # Walk-forward backtests refit many times. A 100-tree forest retains
+        # the same features, labels and chronology while cutting fit work to
+        # roughly one third of the full 300-tree model used for the latest
+        # forecast and formal evaluation.
+        model = _fit(eligible, n_estimators=WALK_FORWARD_TREES)
         predicted = model.predict(block[FEATURES])
         probs = model.predict_proba(block[FEATURES])
         # Realized future outcome is included only for later offline evaluation, never training at prediction time.
@@ -158,6 +169,34 @@ def walk_forward_regime_predictions(df: pd.DataFrame, interval: str = "1d", init
                 "first_prediction_date": str(predictions.index[0]), "last_prediction_date": str(predictions.index[-1]),
                 "prediction_rows": len(predictions), "metrics": _metrics(scored.realized_outcome_regime, scored.predicted_regime, labels) if len(scored) else None}
     return predictions, metadata
+
+
+def _walk_forward_key(df: pd.DataFrame, interval: str, initial_train_fraction: float, refit_every: int):
+    digest = hashlib.blake2b(pd.util.hash_pandas_object(df, index=True).values.tobytes(), digest_size=20).hexdigest()
+    return (digest, interval, initial_train_fraction, refit_every)
+
+
+def walk_forward_regime_predictions(df: pd.DataFrame, interval: str = "1d", initial_train_fraction: float = .60, refit_every: int = 21):
+    """Share the expensive walk-forward fit across dashboard panels for identical price data."""
+    key = _walk_forward_key(df, interval, initial_train_fraction, refit_every)
+    with _WALK_FORWARD_CACHE_LOCK:
+        cached = _WALK_FORWARD_CACHE.get(key)
+        if cached is not None:
+            return cached[0].copy(deep=True), copy.deepcopy(cached[1])
+        lock = _WALK_FORWARD_LOCKS.setdefault(key, threading.Lock())
+
+    with lock:
+        with _WALK_FORWARD_CACHE_LOCK:
+            cached = _WALK_FORWARD_CACHE.get(key)
+            if cached is not None:
+                return cached[0].copy(deep=True), copy.deepcopy(cached[1])
+        result = _walk_forward_uncached(df, interval, initial_train_fraction, refit_every)
+        predictions, metadata = result
+        with _WALK_FORWARD_CACHE_LOCK:
+            _WALK_FORWARD_CACHE[key] = (predictions.copy(deep=True), copy.deepcopy(metadata))
+            while len(_WALK_FORWARD_CACHE) > 16:
+                _WALK_FORWARD_CACHE.pop(next(iter(_WALK_FORWARD_CACHE)))
+        return predictions, metadata
 
 
 def predict_regime(df: pd.DataFrame, interval: str = "1d") -> dict:
